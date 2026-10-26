@@ -684,9 +684,30 @@ impl Tagger {
                 };
                 // Start tagging
                 info!("Starting {platform}");
-                for status in rx {
+                let mut rate_limit_notice_sent = false;
+                for mut status in rx {
                     info!("[{platform}] State: {:?}, Accuracy: {:?}, Path: {:?}", status.status, status.accuracy, status.path);
                     processed += 1;
+
+                    if platform == "spotify"
+                        && !rate_limit_notice_sent
+                        && status.message.as_deref().is_some_and(|message| message.contains("rate limit"))
+                    {
+                        rate_limit_notice_sent = true;
+                        if let Some(next_platform) = config.platforms.get(platform_index + 1) {
+                            let message = format!(
+                                "Spotify was skipped due to rate limiting. Continuing with {}.",
+                                platform_display_name(next_platform)
+                            );
+                            warn!("{message}");
+                            status.message = Some(message);
+                        } else {
+                            let message = "Spotify was skipped due to rate limiting.".to_string();
+                            warn!("{message}");
+                            status.message = Some(message);
+                        }
+                    }
+
                     // Send to UI
                     tx.send(TaggingStatusWrap::wrap(&platform_info.name, &status, platform_index, config.platforms.len(), processed, total)).ok();
 
@@ -1160,6 +1181,16 @@ impl Tagger {
         std::fs::remove_file(source.as_ref())?;
 
         Ok(target)
+    }
+}
+
+fn platform_display_name(platform: &str) -> String {
+    match platform {
+        "itunes" => "iTunes".to_string(),
+        "junodownload" => "Juno Download".to_string(),
+        "musicbrainz" => "MusicBrainz".to_string(),
+        "musixmatch" => "Musixmatch".to_string(),
+        _ => platform.to_string(),
     }
 }
 

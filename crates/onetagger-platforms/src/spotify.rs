@@ -1,6 +1,7 @@
 use anyhow::Error;
 use chrono::NaiveDate;
 use std::time::Duration;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use rspotify::clients::{BaseClient, OAuthClient};
 use rspotify::model::{SearchType, TrackId, Id, AlbumId, ArtistId, Modality};
 use rspotify::{Credentials, Config, AuthCodeSpotify, OAuth, scopes, ClientError, ClientResult};
@@ -21,11 +22,12 @@ static PITCH_CLASS_MINOR: [&'static str; 12] = ["Cm", "Dbm", "Dm", "Ebm", "Em", 
 
 #[derive(Clone)]
 pub struct Spotify {
-    pub spotify: AuthCodeSpotify
+    pub spotify: AuthCodeSpotify,
+    rate_limited: Arc<AtomicBool>,
 }
 
 const SPOTIFY_REQUEST_DELAY: Duration = Duration::from_secs(1);
-const MAX_SPOTIFY_RETRY_DELAY: u64 = 600;
+const MAX_SPOTIFY_RETRY_DELAY: u64 = 30;
 
 impl Spotify {
     /// Create AuthCodeSpotify with parameters
@@ -55,7 +57,10 @@ impl Spotify {
         *client.token.lock().unwrap() = Some(token);
         client.refresh_token().ok()?;
         client.auto_reauth().ok()?;
-        Some(Spotify { spotify: client })
+        Some(Spotify {
+            spotify: client,
+            rate_limited: Arc::new(AtomicBool::new(false)),
+        })
     }
 
      /// Authentication server for callback from spotify
@@ -75,7 +80,8 @@ impl Spotify {
         spotify.auto_reauth()?;
         spotify.write_token_cache()?;
         Ok(Spotify {
-            spotify
+            spotify,
+            rate_limited: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -86,7 +92,8 @@ impl Spotify {
         spotify.auto_reauth()?;
         spotify.write_token_cache()?;
         Ok(Spotify {
-            spotify
+            spotify,
+            rate_limited: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -95,6 +102,10 @@ impl Spotify {
     where
         F: Fn(&Spotify) -> ClientResult<R>
     {
+        if self.rate_limited.load(Ordering::Acquire) {
+            return Err(anyhow!("Spotify rate limit active; skipping Spotify for this run"));
+        }
+
         loop {
             match f(self) {
                 Ok(r) => {
@@ -109,16 +120,20 @@ impl Spotify {
                             let retry_after = r.header("Retry-After")
                                 .and_then(|value| value.parse::<u64>().ok())
                                 .unwrap_or(3);
-                            let delay = retry_after.min(MAX_SPOTIFY_RETRY_DELAY);
                             if retry_after > MAX_SPOTIFY_RETRY_DELAY {
                                 warn!(
-                                    "Spotify rate limit requested {retry_after}s; retrying after capped delay of {delay}s"
+                                    "Spotify rate limit requested {retry_after}s; skipping Spotify for this run"
                                 );
+                                self.rate_limited.store(true, Ordering::Release);
+                                return Err(anyhow!(
+                                    "Spotify rate limit active for {retry_after}s; skipping Spotify for this run"
+                                ));
                             } else {
+                                let delay = retry_after;
                                 warn!("Spotify rate limit hit, sleeping for: {delay}s...");
+                                std::thread::sleep(Duration::from_secs(delay));
+                                continue;
                             }
-                            std::thread::sleep(Duration::from_secs(delay));
-                            continue;
                         }
                         let body = r.into_string().unwrap_or_else(|e| format!("<unable to read response body: {e}>"));
                         error!("Spotify returned HTTP {status}: {body}");
