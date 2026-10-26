@@ -101,8 +101,9 @@ impl Spotify {
             Err(ClientError::Http(http)) => {
                 match *http {
                     rspotify::http::HttpError::StatusCode(r) => {
+                        let status = r.status();
                         // Rate limit
-                        if r.status() == 429 {
+                        if status == 429 {
                             let delay = r.header("Retry-After").map(|v| v.parse().ok()).flatten().unwrap_or(3);
                             if delay > 600 {
                                 error!("Spotify rate limit too high!: {delay}");
@@ -113,7 +114,9 @@ impl Spotify {
                             std::thread::sleep(Duration::from_secs(delay));
                             return self.rate_limit_wrap(f);
                         }
-                        return Err(anyhow!("Unknown Spotify status code: {}", r.status()));
+                        let body = r.into_string().unwrap_or_else(|e| format!("<unable to read response body: {e}>"));
+                        error!("Spotify returned HTTP {status}: {body}");
+                        return Err(anyhow!("Spotify status code {status}: {body}"));
                     },
                     e => return Err(e.into())
                 }
@@ -208,7 +211,7 @@ impl AutotaggerSource for Spotify {
         // Try ISRC
         if let Some(isrc) = info.isrc.as_ref() {
             let query = format!("isrc:{isrc}");
-            let results = self.search_tracks(&query, 20)?;
+            let results = self.search_tracks(&query, 10)?;
             let tracks: Vec<Track> = results.clone().into_iter().map(|t| full_track_to_track(t)).collect();
             if let Some(track) = tracks.first() {
                 return Ok(vec![TrackMatch::new_isrc(track.clone())]);
@@ -217,7 +220,7 @@ impl AutotaggerSource for Spotify {
 
         // Normal search
         let query = format!("{} {}", info.artist()?, MatchingUtils::clean_title(info.title()?));
-        let results = self.search_tracks(&query, 20)?;
+        let results = self.search_tracks(&query, 10)?;
         let tracks = results.clone().into_iter().map(|t| full_track_to_track(t)).collect();
         Ok(MatchingUtils::match_track(info, &tracks, config, true))
     }
