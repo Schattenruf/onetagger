@@ -21,7 +21,7 @@ use reqwest::StatusCode;
 use walkdir::WalkDir;
 use chrono::Datelike;
 use serde::{Serialize, Deserialize};
-use crossbeam_channel::{unbounded, Sender, Receiver};
+use crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender};
 use onetagger_tag::{AudioFileFormat, Tag, Field, TagDate, CoverType, TagImpl, EXTENSIONS};
 use onetagger_shared::Settings;
 use onetagger_player::AudioSources;
@@ -711,12 +711,19 @@ impl Tagger {
                         failed_files.push(status.path.to_owned());
                     }
 
+                    if STOP_TAGGING.load(Ordering::SeqCst) {
+                        break;
+                    }
+
                 }
             };
 
             // Normal fallback behavior: a successful first source removes the file
             // from the remaining normal platform passes.
             for (platform_index, platform) in config.platforms.iter().enumerate() {
+                if STOP_TAGGING.load(Ordering::SeqCst) {
+                    break;
+                }
                 process_platform(platform_index, platform, &config, &mut files);
             }
 
@@ -1003,8 +1010,18 @@ impl Tagger {
             };
             ok_sources += 1;
             std::thread::spawn(move || {
-                while let Ok(f) = file_rx.recv() {
-                    // Stop tagging
+                loop {
+                    let f = match file_rx.recv_timeout(Duration::from_millis(100)) {
+                        Ok(f) => f,
+                        Err(RecvTimeoutError::Timeout) => {
+                            if STOP_TAGGING.load(Ordering::SeqCst) {
+                                break;
+                            }
+                            continue;
+                        },
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    };
+
                     if STOP_TAGGING.load(Ordering::SeqCst) {
                         break;
                     }
