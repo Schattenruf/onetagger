@@ -106,7 +106,7 @@ function removeUnsupportedTags() {
     }
 }
 
-watch(() => [$1t.config.value.platforms.join(','), $1t.info.value.platforms.length, $1t.config.value.tags.join(',')], removeUnsupportedTags, { immediate: true });
+watch(() => `${$1t.config.value.platforms.join(',')}|${$1t.info.value.platforms.length}|${$1t.config.value.tags.join(',')}`, removeUnsupportedTags, { immediate: true });
 
 /// Toggle tag on and off
 function toggleTag(tag: SupportedTag) {
