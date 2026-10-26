@@ -155,30 +155,12 @@ impl Spotify {
     /// Extend track for autotagger
     fn extend_track_spotify(&self, track: &mut Track, config: &TaggerConfig) -> Result<(), Error> {
         // Fetch album
-        if config.tag_enabled(SupportedTag::Label) || config.tag_enabled(SupportedTag::Genre) {
+        if config.tag_enabled(SupportedTag::Genre) {
             match self.album(&AlbumId::from_id(track.release_id.as_ref().ok_or(anyhow!("Missing release_id"))?)?) {
                 Ok(album) => {
-                    track.label = album.label;
                     track.genres.extend(album.genres.into_iter());
                 }
                 Err(e) => warn!("Failed to fetch album data: {}", e),
-            }
-        }
-
-        // Fetch genres from artist if album has them unavailable
-        if config.tag_enabled(SupportedTag::Genre) && track.custom.get("artist_ids").is_some() {
-            for id in track.custom.get("artist_ids").unwrap().split("\0") {
-                debug!("artist id: {id}");
-                match self.artist(&ArtistId::from_uri(id)?) {
-                    Ok(artist) => {
-                        for genre in artist.genres {
-                            if !track.genres.contains(&genre) {
-                                track.genres.push(genre);
-                            }
-                        }
-                    },
-                    Err(e) => warn!("Failed to fetch artist data: {e}"),
-                }
             }
         }
 
@@ -284,7 +266,7 @@ impl AutotaggerSourceBuilder for SpotifyBuilder {
             version: "1.0.0".to_string(),
             custom_options: Default::default(),
             requires_auth: true,
-            supported_tags: supported_tags!(Title, Artist, AlbumArtist, Album, AlbumArt, URL, TrackId, ReleaseId, Duration, TrackNumber, ISRC, ReleaseDate, Genre, Key, Label, Explicit)
+            supported_tags: supported_tags!(Title, Artist, AlbumArtist, Album, AlbumArt, URL, TrackId, ReleaseId, Duration, TrackNumber, ISRC, ReleaseDate, Key, Label, Explicit)
         }
     }
 }

@@ -91,7 +91,7 @@ pub struct AFProperty {
 
 impl AFProperties {
     // Merge properties into list with actual values
-    pub fn merge_with_values(&self, features: &rspotify::model::audio::AudioFeatures, track: &FullTrack, format: AudioFileFormat) -> Vec<AFPropertyMerged> {
+    pub fn merge_with_values(&self, features: &rspotify::model::audio::AudioFeatures, _track: &FullTrack, format: AudioFileFormat) -> Vec<AFPropertyMerged> {
         vec![
             AFPropertyMerged::new(features.danceability, &self.danceability, &format)
                 .add_main_value("#dance-low", "#dance-med", "#dance-high"),
@@ -107,8 +107,6 @@ impl AFProperties {
                 .add_main_value("#music", "", "#speech"),
             AFPropertyMerged::new(features.valence, &self.valence, &format)
                 .add_main_value("#negative", "#balanced", "#positive"),
-            AFPropertyMerged::new(track.popularity as f32 / 100.0, &self.popularity, &format)
-                .add_main_value("#unpopular", "", "#popular")
         ]
     }
 }
