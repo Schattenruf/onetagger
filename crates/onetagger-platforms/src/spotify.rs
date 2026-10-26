@@ -24,6 +24,9 @@ pub struct Spotify {
     pub spotify: AuthCodeSpotify
 }
 
+const SPOTIFY_REQUEST_DELAY: Duration = Duration::from_secs(1);
+const MAX_SPOTIFY_RETRY_DELAY: u64 = 600;
+
 impl Spotify {
     /// Create AuthCodeSpotify with parameters
     pub fn create_client(client_id: &str, client_secret: &str) -> AuthCodeSpotify {
@@ -92,27 +95,30 @@ impl Spotify {
     where
         F: Fn(&Spotify) -> ClientResult<R>
     {
-        match f(self) {
-            Ok(r) => {
-                // Intentionally slow down to prevent rate limits
-                std::thread::sleep(Duration::from_millis(250));
-                Ok(r)
-            },
-            Err(ClientError::Http(http)) => {
-                match *http {
+        loop {
+            match f(self) {
+                Ok(r) => {
+                    // Keep the request rate below Spotify's rolling API limit.
+                    std::thread::sleep(SPOTIFY_REQUEST_DELAY);
+                    return Ok(r);
+                },
+                Err(ClientError::Http(http)) => match *http {
                     rspotify::http::HttpError::StatusCode(r) => {
                         let status = r.status();
-                        // Rate limit
                         if status == 429 {
-                            let delay = r.header("Retry-After").map(|v| v.parse().ok()).flatten().unwrap_or(3);
-                            if delay > 600 {
-                                error!("Spotify rate limit too high!: {delay}");
-                                return Err(anyhow!("Too high rate limit by Spotify"));
+                            let retry_after = r.header("Retry-After")
+                                .and_then(|value| value.parse::<u64>().ok())
+                                .unwrap_or(3);
+                            let delay = retry_after.min(MAX_SPOTIFY_RETRY_DELAY);
+                            if retry_after > MAX_SPOTIFY_RETRY_DELAY {
+                                warn!(
+                                    "Spotify rate limit requested {retry_after}s; retrying after capped delay of {delay}s"
+                                );
+                            } else {
+                                warn!("Spotify rate limit hit, sleeping for: {delay}s...");
                             }
-
-                            warn!("Spotify rate limit hit, sleeping for: {delay}s...");
                             std::thread::sleep(Duration::from_secs(delay));
-                            return self.rate_limit_wrap(f);
+                            continue;
                         }
                         let body = r.into_string().unwrap_or_else(|e| format!("<unable to read response body: {e}>"));
                         error!("Spotify returned HTTP {status}: {body}");
@@ -120,8 +126,8 @@ impl Spotify {
                     },
                     e => return Err(e.into())
                 }
-            },
-            Err(e) => Err(e.into()),
+                Err(e) => return Err(e.into()),
+            }
         }
     }
 
